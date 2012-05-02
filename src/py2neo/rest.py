@@ -51,7 +51,8 @@ class Resource(object):
         self._base_uri = None
         self._relative_uri = None
         self._content_type = content_type
-        params = dict(connection_timeout=20, network_timeout=300)
+        params = dict(connection_timeout=20, network_timeout=300,
+                      disable_ipv6=True)
         params.update(http_params)
         self._http = http or HTTPClient.from_url(self._uri, **params)
         self._index = index
@@ -79,7 +80,6 @@ class Resource(object):
         Spawn a new resource, reusing HTTP connection.
         """
         k = {"http": self._http}
-        k.update(self._request_params)
         k.update(kwargs)
         return class_(*args, **k)
 
@@ -106,20 +106,24 @@ class Resource(object):
             headers = self.__get_request_headers('Accept', 'Content-Type')
         else:
             headers = self.__get_request_headers('Accept')
+
+        response = self._http.request(method, uri, data, headers)
         try:
-            response = self._http.request(method, uri, data, headers)
             self.__response_headers = dict(response.headers)
             if response.status_code == 200:
-                if response.content_length:
+                if response.content_length or \
+                        response['transfer-encoding'] == 'chunked':
                     return json.load(response)
                 else:
                     return None
             elif response.status_code == 201:
-                return response.headers['location']
+                return response['location']
             elif response.status_code == 204:
                 return None
-            elif response.status_code == 400:
-                raise ValueError(response.read())
+            elif response.status_code == 302:
+                if not response.message_complete:
+                    response.read()
+                return self._request('GET', response['location'])
             elif response.status_code == 400:
                 raise ValueError(response.read())
             elif response.status_code == 404:
