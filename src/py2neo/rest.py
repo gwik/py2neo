@@ -17,14 +17,13 @@
 """
 Generic REST client
 """
-from tornado.httpclient import HTTPError
 
 __author__    = "Nigel Small <py2neo@nigelsmall.org>"
 __copyright__ = "Copyright 2011 Nigel Small"
 __license__   = "Apache License, Version 2.0"
 
 
-from tornado import httpclient, curl_httpclient
+from geventhttpclient import HTTPClient
 
 try:
     import json
@@ -45,19 +44,16 @@ class Resource(object):
 
     SUPPORTED_CONTENT_TYPES = ['application/json']
 
-    def __init__(self, uri, content_type='application/json', index=None, http=None, **request_params):
+    def __init__(self, uri, content_type='application/json', index=None, http=None, **http_params):
         if content_type not in self.SUPPORTED_CONTENT_TYPES:
             raise NotImplementedError("Content type {0} not supported".format(content_type))
         self._uri = uri
         self._base_uri = None
         self._relative_uri = None
         self._content_type = content_type
-        self._http = http or httpclient.HTTPClient(curl_httpclient.CurlAsyncHTTPClient)
-        self._request_params = {
-            "request_timeout": 300,    #: default 5 minutes timeout
-            "user_agent": "py2neo"
-        }
-        self._request_params.update(request_params)
+        params = dict(connection_timeout=20, network_timeout=300)
+        params.update(http_params)
+        self._http = http or HTTPClient.from_url(self._uri, **params)
         self._index = index
 
     def __repr__(self):
@@ -86,7 +82,7 @@ class Resource(object):
         k.update(self._request_params)
         k.update(kwargs)
         return class_(*args, **k)
-    
+
     def __get_request_headers(self, *keys):
         return dict([
             (key, self._content_type)
@@ -110,34 +106,34 @@ class Resource(object):
             headers = self.__get_request_headers('Accept', 'Content-Type')
         else:
             headers = self.__get_request_headers('Accept')
-        params = self._request_params.copy()
-        params.update(request_params)
-        params.update({
-            "method": method,
-            "headers": headers,
-            "body": data
-        })
         try:
-            self.__response = self._http.fetch(uri, **params)
-            if self.__response.code == 200:
-                if self.__response.body:
-                    return json.loads(self.__response.body)
+            response = self._http.request(method, uri, data, headers)
+            self.__response_headers = dict(response.headers)
+            if response.status_code == 200:
+                if response.content_length:
+                    return json.load(response)
                 else:
                     return None
-            elif self.__response.code == 201:
-                return self.__response.headers['location']
-            elif self.__response.code == 204:
+            elif response.status_code == 201:
+                return response.headers['location']
+            elif response.status_code == 204:
                 return None
-        except HTTPError as err:
-            self.__response = err.response
-            if err.code == 400:
-                raise ValueError(err.response)
-            elif err.code == 404:
+            elif response.status_code == 400:
+                raise ValueError(response.read())
+            elif response.status_code == 400:
+                raise ValueError(response.read())
+            elif response.status_code == 404:
                 raise LookupError(uri)
-            elif err.code == 409:
+            elif response.status_code == 409:
                 raise SystemError(uri)
             else:
-                raise SystemError(self.__response)
+                raise SystemError(response.read())
+
+            if not response.message_complete:
+                response.read()
+
+        finally:
+            response.release()
 
     def _get(self, uri, **kwargs):
         """
@@ -197,10 +193,10 @@ class Resource(object):
         """
         if self._index is None:
             self._index = self._get(self._uri)
-            if self.__response and 'content-location' in self.__response.headers:
-                self._uri = self.__response.headers['content-location']
+            if self.__response_headers and \
+                    'content-location' in self.__response_headers:
+                self._uri = self.__response_headers['content-location']
         if key in self._index:
             return self._index[key]
         else:
             raise KeyError(key)
-
