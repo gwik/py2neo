@@ -136,7 +136,8 @@ class GraphDatabaseService(rest.Resource):
         """
         Create a new node, optionally with properties.
         """
-        return self._spawn(Node, self._post(self._lookup('node'), _flatten(*props, **kwprops)))
+        data = self._post(self._lookup('node'), _flatten(*props, **kwprops))
+        return self._spawn(Node, data['self'], index=data)
 
     def create_nodes(self, *props):
         """
@@ -144,7 +145,7 @@ class GraphDatabaseService(rest.Resource):
         batch.
         """
         return [
-            self._spawn(Node, result['location'], index=result['body'])
+            self._spawn(Node, result['body']['self'], index=result['body'])
             for result in self._post(self._batch_uri, [
                 {
                     'method': 'POST',
@@ -251,10 +252,11 @@ class GraphDatabaseService(rest.Resource):
         """
         Create a new node index with the supplied name and configuration.
         """
-        index = self._spawn(Index, Node, uri=self._post(self._lookup('node_index'), {
+        data = self._post(self._lookup('node_index'), {
             'name': name,
             'config': config or {}
-        }))
+        })
+        index = self._spawn(NodeIndex, uri=data['self'])
         self._node_indexes.update({name: index})
         return index
 
@@ -265,7 +267,7 @@ class GraphDatabaseService(rest.Resource):
         """
         indexes = self._get(self._lookup('node_index')) or {}
         self._node_indexes = dict([
-            (index, self._spawn(Index, Node, template_uri=indexes[index]['template']))
+            (index, self._spawn(NodeIndex, template_uri=indexes[index]['template']))
             for index in indexes
         ])
         return self._node_indexes
@@ -287,10 +289,11 @@ class GraphDatabaseService(rest.Resource):
         Create a new relationship index with the supplied name and
         configuration.
         """
-        index = self._spawn(Index, Relationship, uri=self._post(self._lookup('relationship_index'), {
+        data = self._post(self._lookup('relationship_index'), {
             'name': name,
             'config': config or {}
-        }))
+        })
+        index = self._spawn(NodeIndex, uri=data['self'])
         self._relationship_indexes.update({name: index})
         return index
 
@@ -301,7 +304,7 @@ class GraphDatabaseService(rest.Resource):
         """
         indexes = self._get(self._lookup('relationship_index')) or {}
         self._relationship_indexes = dict([
-            (index, self._spawn(Index, Relationship, template_uri=indexes[index]['template']))
+            (index, self._spawn(RelationshipIndex, template_uri=indexes[index]['template']))
             for index in indexes
         ])
         return self._relationship_indexes
@@ -499,11 +502,12 @@ class Node(IndexableResource):
         represented by the current instance to the node represented by
         `other_node`.
         """
-        return self._spawn(Relationship, self._post(self._lookup('create_relationship'), {
+        data = self._post(self._lookup('create_relationship'), {
             'to': other_node._uri,
             'type': type,
             'data': _flatten(*args, **kwargs)
-        }))
+        })
+        return self._spawn(Relationship, data['self'], index=data)
 
     def get_relationships(self, direction=Direction.BOTH, *types):
         """
@@ -883,7 +887,27 @@ class Index(rest.Resource):
         self._post(self._batch_uri, self._batch)
         self._batch = None
 
-    def add(self, entity, key, value):
+    def _get_relative_uri(self, unique=False):
+        if unique:
+            return self._relative_uri + '?unique'
+        return self._relative_uri
+
+    def _get_uri(self, unique=False):
+        if unique:
+            return self._uri + '?unique'
+        return self._uri
+
+    def create_unique_node(self, key, value, *props, **kwprops):
+        """
+        Create a new node, optionally with properties.
+        """
+        return self._spawn(Node, self._post(
+                self._get_uri(unique=True),
+                {'properties': _flatten(*props, **kwprops),
+                 'key': key,
+                 'value': value}))
+
+    def add(self, entity, key, value, unique=False):
         """
         Add an entry to this index under the specified `key` and `value`.
         If a batch has been started, this operation will not be submitted
@@ -892,7 +916,7 @@ class Index(rest.Resource):
         if self._graph_database_service._neo4j_version >= (1, 5):
             # new method
             if self._batch is None:
-                self._post(self._uri, {
+                self._post(self._get_uri(unique), {
                     "uri": entity._uri,
                     "key": key,
                     "value": value
@@ -900,7 +924,7 @@ class Index(rest.Resource):
             else:
                 self._batch.append({
                     "method": "POST",
-                    "to": self._relative_uri,
+                    "to": self._get_relative_uri(unique),
                     "body": {
                         "uri": entity._uri,
                         "key": key,
@@ -990,6 +1014,12 @@ class Index(rest.Resource):
                 ))
             ]
 
+    def search(self, key, value):
+        try:
+            return self.get(key, value)
+        except LookupError:
+            return None
+
     def query(self, query):
         """
         Query the current index for items using Lucene (or other) query
@@ -998,6 +1028,76 @@ class Index(rest.Resource):
         return [
             self.__T(item['self'], http=self._http)
             for item in self._get("{0}?query={1}".format(self._uri, _quote(query, "")))
+        ]
+
+
+class NodeIndex(Index):
+
+    def __init__(self, *args, **kwargs):
+        super(NodeIndex, self).__init__(Node, *args, **kwargs)
+
+    def create_unique_nodes(self, key, value_func, *props):
+        """ Like GraphDatabaseService.create_nodes but create unique nodes.
+
+           >>> index.create_unique_nodes('id', lambda p: p['id'],
+                   {'id': 1, 'name': 'John'},
+                   {'id': 2, 'name': 'Jack'})
+        """
+        return [
+            self._spawn(Node, result['body']['self'],
+                        index_entry_uri=result['body']['indexed'],
+                        index=result['body'])
+
+            for result in self._post(self._batch_uri, [
+                {
+                    'method': 'POST',
+                    'to': self._get_relative_url(unique=True),
+                    'body': {'properties': _flatten(prop),
+                             'key': key,
+                             'value': value_func(prop)},
+                    'id': i
+                }
+                for i, prop in enumerate(props)
+            ])
+        ]
+
+    def create_unique_node(self, key, value, *props, **kwprops):
+        """ Create an unique node.
+        """
+        result = self._post(self._get_uri(unique=True),
+                             {'properties': _flatten(*props, **kwprops),
+                              'key': key,
+                              'value': value})
+        return self._spawn(Node, result['self'],
+                           index_entry_uri=result['indexed'],
+                           index=result)
+
+
+class RelationshipIndex(Index):
+
+    def __init__(self, *args, **kwargs):
+        super(RelationshipIndex, self).__init__(Relationship, *args, **kwargs)
+
+    def create_unique_relashionships(self, *descriptors):
+        return [
+            self._spawn(Relationship, result['body']['self'],
+                        index_entry_uri=result['body']['indexed'],
+                        index=result['body'])
+            for result in self._post(self._batch_uri, [
+                {
+                    'method': 'POST',
+                    'to': self._get_relative_uri(unique=True),
+                    'body': {
+                        'start': descriptor['start_node']._uri,
+                        'end': descriptor['end_node']._uri,
+                        'type': descriptor['type'],
+                        'data': _flatten(descriptor['data']) \
+                            if 'data' in descriptor else None
+                    },
+                    'id': i
+                }
+                for i, descriptor in enumerate(descriptors)
+            ])
         ]
 
 

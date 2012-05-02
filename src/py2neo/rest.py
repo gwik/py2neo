@@ -110,14 +110,20 @@ class Resource(object):
         response = self._http.request(method, uri, data, headers)
         try:
             self.__response_headers = dict(response.headers)
-            if response.status_code == 200:
+            if response.status_code in (200, 201):
                 if response.content_length or \
-                        response['transfer-encoding'] == 'chunked':
-                    return json.load(response)
+                        response.get('transfer-encoding') == 'chunked':
+                    data = json.load(response)
+                    if response.status_code == 201 and \
+                            'self' not in data and \
+                            response.get('location') is not None:
+                        data['self'] = response['location']
+                    return data
+                elif response.status_code == 201 and \
+                        response.get('location') is not None:
+                    return response['location']
                 else:
                     return None
-            elif response.status_code == 201:
-                return response['location']
             elif response.status_code == 204:
                 return None
             elif response.status_code == 302:
