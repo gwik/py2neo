@@ -293,7 +293,7 @@ class GraphDatabaseService(rest.Resource):
             'name': name,
             'config': config or {}
         })
-        index = self._spawn(NodeIndex, uri=data['self'])
+        index = self._spawn(RelationshipIndex, uri=data['self'])
         self._relationship_indexes.update({name: index})
         return index
 
@@ -1051,7 +1051,7 @@ class NodeIndex(Index):
             for result in self._post(self._batch_uri, [
                 {
                     'method': 'POST',
-                    'to': self._get_relative_url(unique=True),
+                    'to': self._get_relative_uri(unique=True),
                     'body': {'properties': _flatten(prop),
                              'key': key,
                              'value': value_func(prop)},
@@ -1078,7 +1078,10 @@ class RelationshipIndex(Index):
     def __init__(self, *args, **kwargs):
         super(RelationshipIndex, self).__init__(Relationship, *args, **kwargs)
 
-    def create_unique_relashionships(self, *descriptors):
+    def create_unique_relationship(self, start_node):
+        raise NotImplementedError('TODO')
+
+    def create_unique_relationships(self, *descriptors):
         return [
             self._spawn(Relationship, result['body']['self'],
                         index_entry_uri=result['body']['indexed'],
@@ -1088,10 +1091,12 @@ class RelationshipIndex(Index):
                     'method': 'POST',
                     'to': self._get_relative_uri(unique=True),
                     'body': {
+                        'key': descriptor['key'],
+                        'value': descriptor['value'],
                         'start': descriptor['start_node']._uri,
                         'end': descriptor['end_node']._uri,
                         'type': descriptor['type'],
-                        'data': _flatten(descriptor['data']) \
+                        'properties': _flatten(descriptor['data']) \
                             if 'data' in descriptor else None
                     },
                     'id': i
