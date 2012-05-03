@@ -897,16 +897,6 @@ class Index(rest.Resource):
             return self._uri + '?unique'
         return self._uri
 
-    def create_unique_node(self, key, value, *props, **kwprops):
-        """
-        Create a new node, optionally with properties.
-        """
-        return self._spawn(Node, self._post(
-                self._get_uri(unique=True),
-                {'properties': _flatten(*props, **kwprops),
-                 'key': key,
-                 'value': value}))
-
     def add(self, entity, key, value, unique=False):
         """
         Add an entry to this index under the specified `key` and `value`.
@@ -1078,8 +1068,20 @@ class RelationshipIndex(Index):
     def __init__(self, *args, **kwargs):
         super(RelationshipIndex, self).__init__(Relationship, *args, **kwargs)
 
-    def create_unique_relationship(self, start_node):
-        raise NotImplementedError('TODO')
+    def create_unique_relationship(self, key, value,
+                                   start_node, end_node, type,
+                                   *props, **kwprops):
+        data = self._post(self._get_uri(unique=True),
+                   {'properties': _flatten(*props, **kwprops),
+                    'key': key,
+                    'value': value,
+                    'type': type,
+                    'start': start_node._uri,
+                    'end': end_node._uri
+                })
+        return self._spawn(Relationship, data['self'],
+                           index_entry_uri=data['indexed'],
+                           index=data)
 
     def create_unique_relationships(self, *descriptors):
         return [
