@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
         name="py2neo",
-        version=file("VERSION").read(),
+        version=file("VERSION").read() + '-gwik',
         description="Python bindings to Neo4j",
         long_description="""The py2neo project provides bindings between Python and Neo4j via its RESTful web service interface. It attempts to be both Pythonic and consistent with the core Neo4j API and is compatible with Python 3.""",
         author="Nigel Small",
