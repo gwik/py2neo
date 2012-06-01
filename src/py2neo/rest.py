@@ -135,9 +135,9 @@ class Resource(object):
             elif response.status_code == 404:
                 raise LookupError(uri)
             elif response.status_code == 409:
-                raise SystemError(uri)
+                raise RuntimeError(uri)
             else:
-                raise SystemError(response.read())
+                raise RuntimeError(response.read())
 
             if not response.message_complete:
                 response.read()
